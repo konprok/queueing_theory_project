@@ -28,7 +28,7 @@ class Queue:
         """
         Dodanie pacjenta do systemu: 
         - jeśli jest wolny serwer, trafia bezpośrednio do obsługi (in_service)
-        - w przeciwnym razie do kolejki (FIFO, LIFO lub LIFO + PR).
+        - w przeciwnym razie do kolejki (FIFO lub LIFO + PR).
         """
         if len(self.in_service) < self.servers:
             self.in_service.append(customer)
@@ -47,7 +47,6 @@ class Queue:
         Przetworzenie (obsługa) pacjentów w in_service przez time_step,
         Zwraca listę pacjentów, którzy w tym kroku ukończyli obsługę.
         
-        Tutaj nie ma już logiki PS – wszystkie kolejki działają wg 'else' (FIFO, LIFO, itp.).
         """
         completed = []
 
@@ -107,7 +106,6 @@ class HospitalNetwork:
 
         self.customers = []
         self.time = 0
-        self.gynecology_count = 0
 
     def add_patient(self, arrival_time, patient_class):
         """Dodaj pacjenta do listy oczekujących na przybycie do systemu."""
@@ -167,9 +165,17 @@ class HospitalNetwork:
                     self.delivery.add_customer(customer)
 
                 elif customer["class"] == 2:
-                    # 20% -> [OUT] Inny oddział, 80% -> Odział ginekologiczny
-                    if np.random.rand() < 0.2:
+                    # 20% -> Inny oddział, 40% -> Porodówka, 40% -> Ginekologia
+                    r = np.random.rand()
+                    if r < 0.2:
                         customer["location"] = "other_department"
+                    elif r < 0.6:
+                        customer["remaining_time"] = max(
+                            np.random.exponential(1 / self.delivery.service_rate),
+                            1 / (10 * self.delivery.service_rate)
+                        )
+                        customer["location"] = "delivery"
+                        self.delivery.add_customer(customer)
                     else:
                         customer["remaining_time"] = max(
                             np.random.exponential(1 / self.gynecology.service_rate),
@@ -177,8 +183,6 @@ class HospitalNetwork:
                         )
                         customer["location"] = "gynecology"
                         self.gynecology.add_customer(customer)
-                        self.gynecology_count += 1
-                        print(f"Pacjentka przeniesiona na ginekologię. Liczba: {self.gynecology_count}")
 
             # 2.c) Odział ginekologiczny -> Porodówka / [OUT] Dom
             for customer in comp_gyn:
@@ -199,8 +203,8 @@ class HospitalNetwork:
                 r = np.random.rand()
 
                 if old_class == 3:
-                    # 20% -> klasa 2, 50% -> klasa 1, 30% -> pozostaje 3
-                    if r < 0.20:
+                    # 40% -> klasa 2, 30% -> klasa 1, 30% -> pozostaje 3
+                    if r < 0.40:
                         new_class = 2
                     elif r < 0.70:
                         new_class = 1
@@ -208,19 +212,19 @@ class HospitalNetwork:
                         new_class = 3
 
                 elif old_class == 2:
-                    # 30% -> klasa 1, 30% -> klasa 3, 40% -> pozostaje 2
-                    if r < 0.30:
+                    # 60% -> klasa 1, 10% -> klasa 3, 30% -> pozostaje 2
+                    if r < 0.60:
                         new_class = 1
-                    elif r < 0.60:
+                    elif r < 0.70:
                         new_class = 3
                     else:
                         new_class = 2
 
                 elif old_class == 1:
-                    # 5% -> klasa 3, 15% -> klasa 2, 80% -> pozostaje 1
-                    if r < 0.05:
+                    # 3% -> klasa 3, 7% -> klasa 2, 90% -> pozostaje 1
+                    if r < 0.03:
                         new_class = 3
-                    elif r < 0.20:  # (0.05 + 0.15 = 0.20)
+                    elif r < 0.10:  # (0.03 + 0.07 = 0.10)
                         new_class = 2
                     else:
                         new_class = 1
@@ -262,13 +266,13 @@ class HospitalNetwork:
                 if customer["class"] == 1:
                     customer["location"] = "discharged"
                 elif customer["class"] == 2:
-                    if np.random.rand() < 0.4:
+                    if np.random.rand() < 0.7:
                         customer["class"] = 1
                         customer["location"] = "discharged"
                     else:
                         customer["location"] = "other_department"
 
-            # Dodaj nowych pacjentów (którzy przybyli w tym kroku czasu)
+            # Nowi pacjenci (którzy przybyli w tym kroku czasu)
             new_customers = [
                 c for c in self.customers
                 if abs(c["arrival_time"] - self.time) < 1e-9
@@ -318,7 +322,7 @@ if __name__ == "__main__":
         'registration_fixed_time': 0.25,
 
         'admissions_rate': calculate_service_rate(0.33),    # ~3/h
-        'admissions_servers': 1,
+        'admissions_servers': 2,
 
         'gynecology_rate': calculate_service_rate(48),      # ~0.02/h = 48h średnio
         'gynecology_servers': 10,
@@ -327,9 +331,9 @@ if __name__ == "__main__":
         'delivery_servers': 2,
 
         'icu_rate': calculate_service_rate(24),             # ~0.04/h, 24h
-        'icu_servers': 5,
+        'icu_servers': 3,
 
-        'postpartum_rate': calculate_service_rate(48),      # ~0.02/h, 48h
+        'postpartum_rate': calculate_service_rate(36),      # ~0.02/h, 48h
         'postpartum_servers': 10,
     }
 
@@ -338,7 +342,7 @@ if __name__ == "__main__":
     for hour in range(100):
         num_patients = np.random.poisson(0.5)
         for _ in range(num_patients):
-            patient_class = np.random.choice([1, 2, 3], p=[0.6, 0.3, 0.1])
+            patient_class = np.random.choice([1, 2, 3], p=[0.7, 0.25, 0.05])
             hospital.add_patient(hour, patient_class)
 
     hospital.simulate(total_time=100, time_step=0.1)
