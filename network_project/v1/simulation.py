@@ -1,4 +1,3 @@
-# simulation.py
 from collections import deque
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,9 +5,11 @@ import matplotlib.pyplot as plt
 from config import CONFIG
 
 class Queue:
-    def __init__(self, service_rate, servers,
-                 time_distribution='exponential',
-                 fixed_time=None, policy='FIFO'):
+    def __init__(self, service_rate, servers, time_distribution='exponential', fixed_time=None, policy='FIFO'):
+        if servers <= 0:
+            raise ValueError("Liczba serwerów musi być większa od zera.")
+        if service_rate <= 0:
+            raise ValueError("Stawka obsługi musi być większa od zera.")
         self.service_rate = service_rate
         self.servers = servers
         self.queue = deque()
@@ -22,11 +23,16 @@ class Queue:
         if self.time_distribution == 'exponential':
             service_time = np.random.exponential(1 / self.service_rate)
         else:
-            # fixed
             service_time = self.fixed_time + np.random.normal(0, 1 / self.service_rate)
         return max(service_time, 1/(10*self.service_rate))
 
     def add_customer(self, customer):
+        # M/M/∞ => wrzucamy do in_service bez limitu
+        if self.policy == 'IS':
+            self.in_service.append(customer)
+            return
+
+        # Dla innych kolejek (ograniczona liczba serwerów)
         if len(self.in_service) < self.servers:
             self.in_service.append(customer)
         else:
@@ -34,7 +40,8 @@ class Queue:
                 self.queue.append(customer)
             elif self.policy == 'LIFO':
                 self.queue.appendleft(customer)
-            elif self.policy == 'LIFO + PR':
+            elif self.policy == 'FIFO + PR':
+                # "PR" -> sort malejąco po "class"
                 self.queue.append(customer)
                 self.queue = deque(
                     sorted(self.queue, key=lambda x: x['class'], reverse=True)
@@ -42,18 +49,22 @@ class Queue:
 
     def process(self, time_step):
         completed = []
-        # obsługa w in_service
-        for cust in self.in_service:
-            cust["remaining_time"] -= time_step
-        for cust in list(self.in_service):
-            if cust["remaining_time"] <= 0:
-                completed.append(cust)
-                self.in_service.remove(cust)
-        # przenoszenie z kolejki
-        while len(self.in_service) < self.servers and self.queue:
-            nxt = self.queue.popleft()
-            nxt["remaining_time"] = self._get_service_time()
-            self.in_service.append(nxt)
+        # Zmniejszamy remaining_time
+        for c in self.in_service:
+            c["remaining_time"] -= time_step
+
+        # Usuwamy klientów, którzy skończyli
+        for c in list(self.in_service):
+            if c["remaining_time"] <= 0:
+                completed.append(c)
+                self.in_service.remove(c)
+
+        # Jeśli policy!='IS', to możemy przenosić z kolejki
+        if self.policy != 'IS':
+            while len(self.in_service) < self.servers and self.queue:
+                nxt = self.queue.popleft()
+                nxt["remaining_time"] = self._get_service_time()
+                self.in_service.append(nxt)
 
         self.queue_history.append(len(self.queue))
         return completed
@@ -61,251 +72,277 @@ class Queue:
 
 class HospitalNetwork:
     def __init__(self, config):
-        self.config = config
-        # Tworzymy obiekty Queue:
+        self.cfg = config
+        # Węzły:
         self.registration = Queue(
-            service_rate=config['registration_rate'],
-            servers=config['registration_servers'],
+            config['registration_rate'], config['registration_servers'],
             time_distribution=config['registration_distribution'],
             fixed_time=config['registration_fixed_time'],
             policy='FIFO'
         )
         self.admissions = Queue(
-            service_rate=config['admissions_rate'],
-            servers=config['admissions_servers'],
-            policy='LIFO'
+            config['admissions_rate'], config['admissions_servers'],
+            policy='FIFO + PR'
         )
+        # Ginekologia => M/M/∞
         self.gynecology = Queue(
-            service_rate=config['gynecology_rate'],
-            servers=config['gynecology_servers'],
+            config['gynecology_rate'], config['gynecology_servers'],
+            policy='IS'
+        )
+        # Sala przedporodowa => FIFO
+        self.predelivery = Queue(
+            config['predelivery_rate'], config['predelivery_servers'],
             policy='FIFO'
         )
+        # Porodówka => FIFO+PR
         self.delivery = Queue(
-            service_rate=config['delivery_rate'],
-            servers=config['delivery_servers'],
-            policy='LIFO'
+            config['delivery_rate'], config['delivery_servers'],
+            policy='FIFO + PR'
         )
+        # OIOM => IS (M/M/∞ w symulacji)
         self.icu = Queue(
-            service_rate=config['icu_rate'],
-            servers=config['icu_servers'],
-            policy='FIFO'
+            config['icu_rate'], config['icu_servers'],
+            policy='IS'
         )
+        # Sala poporodowa => FIFO (M/M/c w BCMP)
         self.postpartum = Queue(
-            service_rate=config['postpartum_rate'],
-            servers=config['postpartum_servers'],
+            config['postpartum_rate'], config['postpartum_servers'],
             policy='FIFO'
         )
 
-        self.customers = []
         self.time = 0.0
+        self.customers = []
 
     def add_patient(self, arrival_time, patient_class):
         self.customers.append({
             "arrival_time": arrival_time,
             "remaining_time": 0.0,
-            "class": patient_class,  # 1,2,3
+            "class": patient_class,  # klasa: 1=bez kompl.,2=zkompl.,3=krytyczne
             "location": None
         })
 
-    def simulate(self, total_time, time_step=0.1):
-        cfg = self.config  # skrót
-
+    def simulate(self, total_time, step=0.1):
         while self.time < total_time:
-            comp_reg = self.registration.process(time_step)
-            comp_adm = self.admissions.process(time_step)
-            comp_gyn = self.gynecology.process(time_step)
-            comp_del = self.delivery.process(time_step)
-            comp_icu = self.icu.process(time_step)
-            comp_post = self.postpartum.process(time_step)
+            reg_done = self.registration.process(step)
+            adm_done = self.admissions.process(step)
+            gyn_done = self.gynecology.process(step)
+            pre_done = self.predelivery.process(step)
+            del_done = self.delivery.process(step)
+            icu_done = self.icu.process(step)
+            post_done= self.postpartum.process(step)
 
-            # Rejestracja -> Izba przyjęć
-            for cust in comp_reg:
-                cust["remaining_time"] = max(
+            # Rejestracja -> Izba
+            for c in reg_done:
+                c["remaining_time"] = max(
                     np.random.exponential(1 / self.admissions.service_rate),
                     1/(10*self.admissions.service_rate)
                 )
-                cust["location"] = "admissions"
-                self.admissions.add_customer(cust)
+                c["location"] = "admissions"
+                self.admissions.add_customer(c)
 
-            # Izba przyjęć
-            for cust in comp_adm:
-                ccls = cust["class"]  # 1,2,3
-                if ccls == 1:
-                    # p_out = 0.1
-                    p_out = cfg['admissions_class1_out']  
-                    if np.random.rand() < p_out:
-                        cust["location"] = "discharged"
+            # Izba
+            for c in adm_done:
+                if c["class"] == 1:
+                    # kl1 => 75% predelivery, 25% delivery
+                    p_pre = self.cfg['admissions_class1_predelivery']
+                    if np.random.rand() < p_pre:
+                        c["remaining_time"] = max(
+                            np.random.exponential(1/self.predelivery.service_rate),
+                            1/(10*self.predelivery.service_rate)
+                        )
+                        c["location"] = "predelivery"
+                        self.predelivery.add_customer(c)
                     else:
-                        # do delivery
-                        cust["remaining_time"] = max(
-                            np.random.exponential(1 / self.delivery.service_rate),
+                        c["remaining_time"] = max(
+                            np.random.exponential(1/self.delivery.service_rate),
                             1/(10*self.delivery.service_rate)
                         )
-                        cust["location"] = "delivery"
-                        self.delivery.add_customer(cust)
+                        c["location"] = "delivery"
+                        self.delivery.add_customer(c)
 
-                elif ccls == 3:
-                    # w 100% do delivery (w config np. p_out=0)
-                    p_out = cfg['admissions_class3_out']
-                    if np.random.rand() < p_out:
-                        cust["location"] = "discharged"
-                    else:
-                        cust["remaining_time"] = max(
-                            np.random.exponential(1 / self.delivery.service_rate),
+                elif c["class"] == 2:
+                    # kl2 => 40% predelivery, 20% delivery, 40% gyn
+                    p_pre = self.cfg['admissions_class2_predelivery']
+                    p_del = self.cfg['admissions_class2_delivery']
+                    p_gyn = self.cfg['admissions_class2_gyn']
+                    x = np.random.rand()
+                    if x < p_pre:
+                        c["remaining_time"] = max(
+                            np.random.exponential(1/self.predelivery.service_rate),
+                            1/(10*self.predelivery.service_rate)
+                        )
+                        c["location"] = "predelivery"
+                        self.predelivery.add_customer(c)
+                    elif x < p_pre + p_del:
+                        c["remaining_time"] = max(
+                            np.random.exponential(1/self.delivery.service_rate),
                             1/(10*self.delivery.service_rate)
                         )
-                        cust["location"] = "delivery"
-                        self.delivery.add_customer(cust)
-
-                elif ccls == 2:
-                    # p_out=0.2, p_del=0.4, p_gyn=0.4
-                    p_out = cfg['admissions_class2_out']
-                    p_del = cfg['admissions_class2_delivery']
-                    # p_gyn = 1 - p_out - p_del => config['admissions_class2_gyn']
-                    p_gyn = cfg['admissions_class2_gyn']
-                    r = np.random.rand()
-                    if r < p_out:
-                        cust["location"] = "other_department"
-                    elif r < p_out + p_del:
-                        cust["remaining_time"] = max(
-                            np.random.exponential(1 / self.delivery.service_rate),
-                            1/(10*self.delivery.service_rate)
-                        )
-                        cust["location"] = "delivery"
-                        self.delivery.add_customer(cust)
+                        c["location"] = "delivery"
+                        self.delivery.add_customer(c)
                     else:
-                        cust["remaining_time"] = max(
-                            np.random.exponential(1 / self.gynecology.service_rate),
+                        # do ginekologii
+                        c["remaining_time"] = max(
+                            np.random.exponential(1/self.gynecology.service_rate),
                             1/(10*self.gynecology.service_rate)
                         )
-                        cust["location"] = "gynecology"
-                        self.gynecology.add_customer(cust)
+                        c["location"] = "gynecology"
+                        self.gynecology.add_customer(c)
 
+                elif c["class"] == 3:
+                    # kl3 => 100% do delivery
+                    c["remaining_time"] = max(
+                        np.random.exponential(1/self.delivery.service_rate),
+                        1/(10*self.delivery.service_rate)
+                    )
+                    c["location"] = "delivery"
+                    self.delivery.add_customer(c)
+            
             # Ginekologia
-            for cust in comp_gyn:
-                if cust["class"] == 2:
-                    p_out = cfg['gyn_class2_out']  # 0.1
-                    if np.random.rand() < p_out:
-                        cust["location"] = "discharged"
-                    else:
-                        # do delivery
-                        cust["remaining_time"] = max(
-                            np.random.exponential(1 / self.delivery.service_rate),
-                            1/(10*self.delivery.service_rate)
-                        )
-                        cust["location"] = "delivery"
-                        self.delivery.add_customer(cust)
+            for c in gyn_done:
+                # 10% out, 90% -> delivery
+                if np.random.rand() < 0.1:
+                    c["location"] = "discharged"
+                else:
+                    c["remaining_time"] = max(
+                        np.random.exponential(1 / self.delivery.service_rate),
+                        1 / (10 * self.delivery.service_rate)
+                    )
+                    c["location"] = "delivery"
+                    self.delivery.add_customer(c)
 
-            # Porodówka + zmiana klasy
-            for cust in comp_del:
-                old_class = cust["class"]
-                rr = np.random.rand()
-                if old_class == 3:  # 3->2(0.4),1(0.3),3(0.3)
-                    p_3to2 = cfg['delivery_class3_to2']
-                    p_3to1 = cfg['delivery_class3_to1']
-                    if rr < p_3to2:
-                        new_class = 2
-                    elif rr < p_3to2 + p_3to1:
-                        new_class = 1
-                    else:
-                        new_class = 3
-                elif old_class == 2:  # 2->1(0.6),3(0.1),2(0.3)
-                    p_2to1 = cfg['delivery_class2_to1']
-                    p_2to3 = cfg['delivery_class2_to3']
-                    if rr < p_2to1:
-                        new_class = 1
-                    elif rr < p_2to1 + p_2to3:
-                        new_class = 3
-                    else:
-                        new_class = 2
-                elif old_class == 1:  # 1->3(0.03),2(0.07),1(0.9)
-                    p_1to3 = cfg['delivery_class1_to3']
-                    p_1to2 = cfg['delivery_class1_to2']
-                    if rr < p_1to3:
-                        new_class = 3
-                    elif rr < p_1to3 + p_1to2:
-                        new_class = 2
-                    else:
-                        new_class = 1
 
-                cust["class"] = new_class
-                # kl3 => icu, kl1/2 => postpartum
-                if new_class == 3:
-                    cust["remaining_time"] = max(
-                        np.random.exponential(1 / self.icu.service_rate),
+            # Sala przedporodowa
+            for c in pre_done:
+                if c["class"] == 1:
+                    # kl1 => 100% do porodówki
+                    c["remaining_time"] = max(
+                        np.random.exponential(1/self.delivery.service_rate),
+                        1/(10*self.delivery.service_rate)
+                    )
+                    c["location"] = "delivery"
+                    self.delivery.add_customer(c)
+                elif c["class"] == 2:
+                    # 50% => kl1, 50% => kl2
+                    if np.random.rand() < self.cfg['predelivery_class2_switch_to1']:
+                        c["class"] = 1
+                    c["remaining_time"] = max(
+                        np.random.exponential(1/self.delivery.service_rate),
+                        1/(10*self.delivery.service_rate)
+                    )
+                    c["location"] = "delivery"
+                    self.delivery.add_customer(c)
+
+            # Porodówka
+            for c in del_done:
+                old = c["class"]
+                r = np.random.rand()
+                if old == 3:
+                    p_3to2 = self.cfg['delivery_class3_to2']
+                    p_3to1 = self.cfg['delivery_class3_to1']
+                    if r < p_3to2:
+                        new = 2
+                    elif r < p_3to2 + p_3to1:
+                        new = 1
+                    else:
+                        new = 3
+                elif old == 2:
+                    p_2to1 = self.cfg['delivery_class2_to1']
+                    p_2to3 = self.cfg['delivery_class2_to3']
+                    if r < p_2to1:
+                        new = 1
+                    elif r < p_2to1 + p_2to3:
+                        new = 3
+                    else:
+                        new = 2
+                elif old == 1:
+                    p_1to3 = self.cfg['delivery_class1_to3']
+                    p_1to2 = self.cfg['delivery_class1_to2']
+                    if r < p_1to3:
+                        new = 3
+                    elif r < p_1to3 + p_1to2:
+                        new = 2
+                    else:
+                        new = 1
+                c["class"] = new
+
+                if new == 3:
+                    # do OIOM
+                    c["remaining_time"] = max(
+                        np.random.exponential(1/self.icu.service_rate),
                         1/(10*self.icu.service_rate)
                     )
-                    cust["location"] = "icu"
-                    self.icu.add_customer(cust)
+                    c["location"] = "icu"
+                    self.icu.add_customer(c)
                 else:
-                    cust["remaining_time"] = max(
-                        np.random.exponential(1 / self.postpartum.service_rate),
+                    # kl1/kl2 => postpartum
+                    c["remaining_time"] = max(
+                        np.random.exponential(1/self.postpartum.service_rate),
                         1/(10*self.postpartum.service_rate)
                     )
-                    cust["location"] = "postpartum"
-                    self.postpartum.add_customer(cust)
+                    c["location"] = "postpartum"
+                    self.postpartum.add_customer(c)
 
-            # ICU
-            for cust in comp_icu:
-                p_newclass1 = cfg['icu_p_newclass1']  # 0.5
-                # choose [1,2] z tymi p
-                if np.random.rand() < p_newclass1:
-                    new_class = 1
-                    cust["remaining_time"] = max(
-                        np.random.exponential(1 / self.postpartum.service_rate),
+            # OIOM
+            for c in icu_done:
+                if np.random.rand() < self.cfg['icu_p_newclass1']:
+                    c["class"] = 1
+                    c["remaining_time"] = max(
+                        np.random.exponential(1/self.postpartum.service_rate),
                         1/(10*self.postpartum.service_rate)
                     )
-                    cust["location"] = "postpartum"
-                    self.postpartum.add_customer(cust)
+                    c["location"] = "postpartum"
+                    self.postpartum.add_customer(c)
                 else:
-                    new_class = 2
-                    cust["location"] = "other_department"
-                cust["class"] = new_class
+                    c["class"] = 2
+                    c["location"] = "other_department"
 
-            # postpartum
-            for cust in comp_post:
-                if cust["class"] == 1:
-                    cust["location"] = "discharged"
-                elif cust["class"] == 2:
-                    # p=0.7 => kl1 => out
-                    p_2to1 = cfg['postpartum_class2_switch_to1']
-                    if np.random.rand() < p_2to1:
-                        cust["class"] = 1
-                        cust["location"] = "discharged"
+            # Sala poporodowa
+            for c in post_done:
+                if c["class"] == 1:
+                    c["location"] = "discharged"
+                elif c["class"] == 2:
+                    # 70% => kl1 => out, 30% => other
+                    if np.random.rand() < self.cfg['postpartum_class2_switch_to1']:
+                        c["class"] = 1
+                        c["location"] = "discharged"
                     else:
-                        cust["location"] = "other_department"
+                        c["location"] = "other_department"
 
-            # Nowi pacjenci w tym kroku
-            new_custs = [
-                c for c in self.customers
-                if abs(c["arrival_time"] - self.time) < 1e-9
-            ]
-            for nc in new_custs:
-                if nc["class"] == 3:
-                    # omija rejestrację
-                    nc["remaining_time"] = max(
-                        np.random.exponential(1 / self.admissions.service_rate),
-                        1/(10*self.admissions.service_rate)
-                    )
-                    nc["location"] = "admissions"
-                    self.admissions.add_customer(nc)
+            # Nowi pacjenci
+            new_arrivals = [x for x in self.customers
+                            if abs(x["arrival_time"] - self.time) < 1e-9]
+            for c in new_arrivals:
+                if c["class"] == 3:
+                    # 20% -> rejestracja, 80% -> izba
+                    if np.random.rand() < self.cfg['registration_class3_in']:
+                        c["location"] = "registration"
+                        self.registration.add_customer(c)
+                    else:
+                        c["remaining_time"] = max(
+                            np.random.exponential(1/self.admissions.service_rate),
+                            1/(10*self.admissions.service_rate)
+                        )
+                        c["location"] = "admissions"
+                        self.admissions.add_customer(c)
                 else:
-                    # kl1/kl2 => rejestracja
-                    nc["location"] = "registration"
-                    self.registration.add_customer(nc)
+                    # kl1,kl2 => rejestracja
+                    c["location"] = "registration"
+                    self.registration.add_customer(c)
 
-            self.time += time_step
+            self.time += step
 
         print("Symulacja zakończona.")
 
     def plot_queue_lengths(self):
-        plt.figure(figsize=(10,5))
+        plt.figure(figsize=(12,6))
         plt.plot(self.registration.queue_history, label='Rejestracja')
         plt.plot(self.admissions.queue_history, label='Izba przyjęć')
-        plt.plot(self.gynecology.queue_history, label='Ginekologia')
-        plt.plot(self.delivery.queue_history, label='Porodówka')
+        plt.plot(self.gynecology.queue_history, label='O.ginekologiczny')
+        plt.plot(self.predelivery.queue_history, label='S.przedporodowa')
+        plt.plot(self.delivery.queue_history, label='S.porodowa')
         plt.plot(self.icu.queue_history, label='OIOM')
-        plt.plot(self.postpartum.queue_history, label='Poporodowa')
+        plt.plot(self.postpartum.queue_history, label='S.poporodowa')
         plt.title('Długości kolejek w czasie')
         plt.xlabel('Krok symulacji')
         plt.ylabel('Liczba oczekujących')

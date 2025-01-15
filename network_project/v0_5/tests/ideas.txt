@@ -1,7 +1,0 @@
-Pomysły na wykresy
-
-1. srednia liczba zgloszen dalej klasy w danym systemie
-2. sredni czas do porodu zaleznie od klasy, (może byc wraz z upływem symulacji czyli przed przepełnieniem będzie mniejszy)
-3. sredni czas od wejscia do wyjscia dla kazdej klasy (no i tu nie wiem czy robić też dla tych który opuścili wczesniej chyba bez sensu)
-4. może rozkład przychodzenia pacjentek w czasie symulacji z względniemiem klas
-5. no i nie wiem co jeszcze
