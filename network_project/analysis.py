@@ -68,7 +68,6 @@ def build_routing_matrix_4d(cfg):
 
     return P
 
-
 def _mmc_stationary_distribution(c, rho, max_k=20):
     if rho>=c:
         return None
@@ -132,19 +131,18 @@ def compute_bcmp_open_network_4d(
                 rho_i_r[i,r_] = (arrival_rates[r_]* e_i_r[i,r_]) / mu_
     rho_i = np.sum(rho_i_r, axis=1)
 
-    # 3) K_i_r (średnie liczby w węzłach)
+    # 3) K_i_r
     K_i_r = np.zeros((N,R))
     for i in range(N):
         typ = node_types[i]
-        if typ in [1,4]:  # M/M/1 lub PS
+        if typ in [1,4]:
             if rho_i[i]<1.0:
-                # Rozkład proporcjonalny do rho_{i,r}
                 denom= rho_i[i]
                 for r_ in range(R):
                     if denom>0:
                         alpha= rho_i_r[i,r_]/ denom
                         K_i_r[i,r_]= alpha*(denom/(1-denom))
-        elif typ==2:  # M/M/c
+        elif typ==2:
             c_ = servers_per_node[i]
             lam_i = sum(arrival_rates[r_]* e_i_r[i,r_] for r_ in range(R))
             mus = [service_rates[i,xx] for xx in range(R) if service_rates[i,xx]>0]
@@ -153,7 +151,6 @@ def compute_bcmp_open_network_4d(
             mu_avg= np.mean(mus)
             rho_prime= lam_i/(c_*mu_avg)
             if rho_prime<1.0:
-                # ErlangC
                 def erlang_c(c,a):
                     from math import factorial
                     num= (a**c)/factorial(c)*( c/(c-a) )
@@ -172,18 +169,18 @@ def compute_bcmp_open_network_4d(
                     if sum_rhoi>0:
                         alpha= rho_i_r[i,r_]/ sum_rhoi
                         K_i_r[i,r_]= alpha*L
-        elif typ==3:  # M/M/∞
+        elif typ==3:
             for r_ in range(R):
                 K_i_r[i,r_]= rho_i_r[i,r_]
 
     K_i= np.sum(K_i_r,axis=1)
 
-    # 4) pi_i_k (rozkłady stacjonarne)
+    # 4) pi_i_k
     pi_i_k= {}
     maxk= max_k_for_print
     for i in range(N):
         typ= node_types[i]
-        if typ in [1,4]:  # M/M/1 lub PS
+        if typ in [1,4]:
             if rho_i[i]<1.0:
                 r_= rho_i[i]
                 dist=[]
@@ -192,7 +189,7 @@ def compute_bcmp_open_network_4d(
                 pi_i_k[i]= np.array(dist)
             else:
                 pi_i_k[i]= None
-        elif typ==2: # M/M/c
+        elif typ==2:
             c_= servers_per_node[i]
             lam_i= sum(arrival_rates[r_]* e_i_r[i,r_] for r_ in range(R))
             mus = [service_rates[i,xx] for xx in range(R) if service_rates[i,xx]>0]
@@ -206,7 +203,7 @@ def compute_bcmp_open_network_4d(
             else:
                 dist= _mmc_stationary_distribution(c_, bigrho, maxk)
                 pi_i_k[i]= np.array(dist) if dist else None
-        elif typ==3: # M/M/∞
+        elif typ==3:
             r_= rho_i[i]
             from math import factorial
             dist=[]
@@ -278,7 +275,6 @@ def run_bcmp_analysis():
        "S.poporodowa"
     ]
 
-    # --- Obciążenie węzłów ---
     rho_i= result['rho_i']
     plt.figure(figsize=(12,5))
     plt.bar(range(N), rho_i, color='green')
@@ -288,7 +284,6 @@ def run_bcmp_analysis():
     plt.grid(True)
     plt.show()
 
-    # --- e_{i,r} ---
     e_i_r= result['e_i_r']
     class_names= ["Bez komplikacji.","Z komplikacjami","Krytyczne"]
     class_colors= ["green","orange","red"]
@@ -309,7 +304,6 @@ def run_bcmp_analysis():
     plt.grid(True,axis='y')
     plt.show()
 
-    # --- rho_{i,r} ---
     rho_i_r= result['rho_i_r']
     plt.figure(figsize=(12,5))
     for r_ in range(R):

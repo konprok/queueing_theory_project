@@ -5,7 +5,6 @@ def calculate_service_rate(time_in_hours):
 
 def validate_config(config):
     errors = []
-    # Walidacja liczby serwerów
     if config['registration_servers'] <= 0:
         errors.append("Liczba serwerów w rejestracji musi być większa od zera.")
     if config['admissions_servers'] <= 0:
@@ -25,38 +24,40 @@ def validate_config(config):
 
 CONFIG = {
     # Intensywności obsługi:
-    'registration_rate': calculate_service_rate(0.25),  # 4/h
+    'registration_rate': calculate_service_rate(0.25),  # 15 min
     'registration_servers': 1,
     'registration_distribution': 'fixed',
     'registration_fixed_time': 0.25,
 
-    'admissions_rate': calculate_service_rate(0.33),  # ~3/h
+    'admissions_rate': calculate_service_rate(0.33),  # 20 min
     'admissions_servers': 2,
 
     # Ginekologia, docelowo M/M/∞
-    'gynecology_rate': calculate_service_rate(36),   # 1/36 ~ 0.0278/h
+    'gynecology_rate': calculate_service_rate(36),   # 36h
     'gynecology_servers': 10,  
 
     # Sala przedporodowa
-    'predelivery_rate': calculate_service_rate(8),  # 1/10=0.1/h
+    'predelivery_rate': calculate_service_rate(8),  # 8h
     'predelivery_servers': 15,
 
     # Porodówka
-    'delivery_rate': calculate_service_rate(3),      # ~0.33/h
+    'delivery_rate': calculate_service_rate(3),      # 3h
     'delivery_servers': 6,
 
     # OIOM
-    'icu_rate': calculate_service_rate(24),          # ~0.0417/h
-    'icu_servers': 1,   # w symulacji. For M/M/∞ in BCMP, set node_type=3
+    'icu_rate': calculate_service_rate(24),          # 24h
+    'icu_servers': 1,
 
     # Sala poporodowa
     'postpartum_rate': calculate_service_rate(24),   
-    'postpartum_servers': 25,  # M/M/c w BCMP
+    'postpartum_servers': 25,
 
     # Strumień napływu pacjentek
     'arrival_lambda': 1.0,
     'class_probs': [0.65, 0.25, 0.1],  # klasa1=0.65, kl2=0.25, kl3=0.1
 
+    #Przechodzenie między nodeami 
+    
     # Rejestracja: 20% kl3 -> rejestracja, 80% -> omija
     'registration_class3_in': 0.2,
 

@@ -27,12 +27,10 @@ class Queue:
         return max(service_time, 1/(10*self.service_rate))
 
     def add_customer(self, customer):
-        # M/M/∞ => wrzucamy do in_service bez limitu
         if self.policy == 'IS':
             self.in_service.append(customer)
             return
 
-        # Dla innych kolejek (ograniczona liczba serwerów)
         if len(self.in_service) < self.servers:
             self.in_service.append(customer)
         else:
@@ -41,7 +39,6 @@ class Queue:
             elif self.policy == 'LIFO':
                 self.queue.appendleft(customer)
             elif self.policy == 'FIFO + PR':
-                # "PR" -> sort malejąco po "class"
                 self.queue.append(customer)
                 self.queue = deque(
                     sorted(self.queue, key=lambda x: x['class'], reverse=True)
@@ -49,17 +46,14 @@ class Queue:
 
     def process(self, time_step):
         completed = []
-        # Zmniejszamy remaining_time
         for c in self.in_service:
             c["remaining_time"] -= time_step
 
-        # Usuwamy klientów, którzy skończyli
         for c in list(self.in_service):
             if c["remaining_time"] <= 0:
                 completed.append(c)
                 self.in_service.remove(c)
 
-        # Jeśli policy!='IS', to możemy przenosić z kolejki
         if self.policy != 'IS':
             while len(self.in_service) < self.servers and self.queue:
                 nxt = self.queue.popleft()
@@ -73,7 +67,6 @@ class Queue:
 class HospitalNetwork:
     def __init__(self, config):
         self.cfg = config
-        # Węzły:
         self.registration = Queue(
             config['registration_rate'], config['registration_servers'],
             time_distribution=config['registration_distribution'],
@@ -84,27 +77,22 @@ class HospitalNetwork:
             config['admissions_rate'], config['admissions_servers'],
             policy='FIFO + PR'
         )
-        # Ginekologia => M/M/∞
         self.gynecology = Queue(
             config['gynecology_rate'], config['gynecology_servers'],
             policy='IS'
         )
-        # Sala przedporodowa => FIFO
         self.predelivery = Queue(
             config['predelivery_rate'], config['predelivery_servers'],
             policy='FIFO'
         )
-        # Porodówka => FIFO+PR
         self.delivery = Queue(
             config['delivery_rate'], config['delivery_servers'],
             policy='FIFO + PR'
         )
-        # OIOM => IS (M/M/∞ w symulacji)
         self.icu = Queue(
             config['icu_rate'], config['icu_servers'],
             policy='IS'
         )
-        # Sala poporodowa => FIFO (M/M/c w BCMP)
         self.postpartum = Queue(
             config['postpartum_rate'], config['postpartum_servers'],
             policy='FIFO'
@@ -117,7 +105,7 @@ class HospitalNetwork:
         self.customers.append({
             "arrival_time": arrival_time,
             "remaining_time": 0.0,
-            "class": patient_class,  # klasa: 1=bez kompl.,2=zkompl.,3=krytyczne
+            "class": patient_class,
             "location": None
         })
 
@@ -131,7 +119,6 @@ class HospitalNetwork:
             icu_done = self.icu.process(step)
             post_done= self.postpartum.process(step)
 
-            # Rejestracja -> Izba
             for c in reg_done:
                 c["remaining_time"] = max(
                     np.random.exponential(1 / self.admissions.service_rate),
@@ -140,10 +127,8 @@ class HospitalNetwork:
                 c["location"] = "admissions"
                 self.admissions.add_customer(c)
 
-            # Izba
             for c in adm_done:
                 if c["class"] == 1:
-                    # kl1 => 75% predelivery, 25% delivery
                     p_pre = self.cfg['admissions_class1_predelivery']
                     if np.random.rand() < p_pre:
                         c["remaining_time"] = max(
@@ -161,7 +146,6 @@ class HospitalNetwork:
                         self.delivery.add_customer(c)
 
                 elif c["class"] == 2:
-                    # kl2 => 40% predelivery, 20% delivery, 40% gyn
                     p_pre = self.cfg['admissions_class2_predelivery']
                     p_del = self.cfg['admissions_class2_delivery']
                     p_gyn = self.cfg['admissions_class2_gyn']
@@ -181,7 +165,6 @@ class HospitalNetwork:
                         c["location"] = "delivery"
                         self.delivery.add_customer(c)
                     else:
-                        # do ginekologii
                         c["remaining_time"] = max(
                             np.random.exponential(1/self.gynecology.service_rate),
                             1/(10*self.gynecology.service_rate)
@@ -190,7 +173,6 @@ class HospitalNetwork:
                         self.gynecology.add_customer(c)
 
                 elif c["class"] == 3:
-                    # kl3 => 100% do delivery
                     c["remaining_time"] = max(
                         np.random.exponential(1/self.delivery.service_rate),
                         1/(10*self.delivery.service_rate)
@@ -198,9 +180,7 @@ class HospitalNetwork:
                     c["location"] = "delivery"
                     self.delivery.add_customer(c)
             
-            # Ginekologia
             for c in gyn_done:
-                # 10% out, 90% -> delivery
                 if np.random.rand() < 0.1:
                     c["location"] = "discharged"
                 else:
@@ -212,10 +192,8 @@ class HospitalNetwork:
                     self.delivery.add_customer(c)
 
 
-            # Sala przedporodowa
             for c in pre_done:
                 if c["class"] == 1:
-                    # kl1 => 100% do porodówki
                     c["remaining_time"] = max(
                         np.random.exponential(1/self.delivery.service_rate),
                         1/(10*self.delivery.service_rate)
@@ -223,7 +201,6 @@ class HospitalNetwork:
                     c["location"] = "delivery"
                     self.delivery.add_customer(c)
                 elif c["class"] == 2:
-                    # 50% => kl1, 50% => kl2
                     if np.random.rand() < self.cfg['predelivery_class2_switch_to1']:
                         c["class"] = 1
                     c["remaining_time"] = max(
@@ -233,7 +210,6 @@ class HospitalNetwork:
                     c["location"] = "delivery"
                     self.delivery.add_customer(c)
 
-            # Porodówka
             for c in del_done:
                 old = c["class"]
                 r = np.random.rand()
@@ -267,7 +243,6 @@ class HospitalNetwork:
                 c["class"] = new
 
                 if new == 3:
-                    # do OIOM
                     c["remaining_time"] = max(
                         np.random.exponential(1/self.icu.service_rate),
                         1/(10*self.icu.service_rate)
@@ -275,7 +250,6 @@ class HospitalNetwork:
                     c["location"] = "icu"
                     self.icu.add_customer(c)
                 else:
-                    # kl1/kl2 => postpartum
                     c["remaining_time"] = max(
                         np.random.exponential(1/self.postpartum.service_rate),
                         1/(10*self.postpartum.service_rate)
@@ -283,7 +257,6 @@ class HospitalNetwork:
                     c["location"] = "postpartum"
                     self.postpartum.add_customer(c)
 
-            # OIOM
             for c in icu_done:
                 if np.random.rand() < self.cfg['icu_p_newclass1']:
                     c["class"] = 1
@@ -297,24 +270,20 @@ class HospitalNetwork:
                     c["class"] = 2
                     c["location"] = "other_department"
 
-            # Sala poporodowa
             for c in post_done:
                 if c["class"] == 1:
                     c["location"] = "discharged"
                 elif c["class"] == 2:
-                    # 70% => kl1 => out, 30% => other
                     if np.random.rand() < self.cfg['postpartum_class2_switch_to1']:
                         c["class"] = 1
                         c["location"] = "discharged"
                     else:
                         c["location"] = "other_department"
 
-            # Nowi pacjenci
             new_arrivals = [x for x in self.customers
                             if abs(x["arrival_time"] - self.time) < 1e-9]
             for c in new_arrivals:
                 if c["class"] == 3:
-                    # 20% -> rejestracja, 80% -> izba
                     if np.random.rand() < self.cfg['registration_class3_in']:
                         c["location"] = "registration"
                         self.registration.add_customer(c)
@@ -326,7 +295,6 @@ class HospitalNetwork:
                         c["location"] = "admissions"
                         self.admissions.add_customer(c)
                 else:
-                    # kl1,kl2 => rejestracja
                     c["location"] = "registration"
                     self.registration.add_customer(c)
 
