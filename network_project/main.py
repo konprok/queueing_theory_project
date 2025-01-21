@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox
-from config import CONFIG, validate_config
+from config import CONFIG
 from simulation import HospitalNetwork
 from analysis import run_bcmp_analysis
 import numpy as np
@@ -15,7 +15,8 @@ def validate_with_ranges(config):
         'predelivery_servers': (1, 30),
         'delivery_servers': (1, 10),
         'icu_servers': (1, 5),
-        'postpartum_servers': (1, 25)
+        'postpartum_servers': (1, 25),
+        'arrival_lambda': (1, 10)
     }
 
     for key, (min_val, max_val) in server_limits.items():
